@@ -25,8 +25,8 @@ type SelectedDish = {
 export default function ScanDetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
-  const [isGeneratingMore, setIsGeneratingMore] = useState(false);
   const [isStopping, setIsStopping] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
   const [selectedDish, setSelectedDish] = useState<SelectedDish>(null);
   
   // Realtime subscription to scan + dishes
@@ -35,10 +35,10 @@ export default function ScanDetailScreen() {
     id ? { scanId: id as Id<"menuScans"> } : "skip"
   );
   
-  const generateRemaining = useAction(api.actions.generateRemainingImages);
   const generateSingleImage = useAction(api.actions.generateSingleDishImage);
   const stopGeneration = useMutation(api.mutations.stopImageGeneration);
   const forceComplete = useMutation(api.mutations.forceCompleteScan);
+  const deleteScan = useMutation(api.mutations.deleteScan);
 
   if (!data) {
     return (
@@ -49,32 +49,101 @@ export default function ScanDetailScreen() {
     );
   }
 
-  const { scan, dishes, sections, noSection } = data;
+  const { scan, dishes, sections: rawSections, noSection } = data;
   
-  // Calculate remaining dishes without images
-  const dishesWithoutImages = dishes.filter(
-    d => d.imageStatus === "pending" || d.imageStatus === "skipped"
-  ).length;
+  // Show processing screen during initial extraction
+  const isProcessing = ["pending", "uploading", "processing", "extracting"].includes(scan.status);
   
-  const handleGenerateRemaining = async () => {
-    if (isGeneratingMore) return;
-    
-    setIsGeneratingMore(true);
-    try {
-      const result = await generateRemaining({ 
-        scanId: id as Id<"menuScans"> 
-      });
-      
-      if (result.queued === 0) {
-        Alert.alert("Info", result.message);
+  if (isProcessing) {
+    const getProcessingMessage = () => {
+      switch (scan.status) {
+        case "pending": return "Preparing...";
+        case "uploading": return "Uploading image...";
+        case "processing": return "Analyzing menu...";
+        case "extracting": return "Reading menu items...";
+        default: return "Processing...";
       }
-    } catch (error) {
-      console.error("Failed to generate:", error);
-      Alert.alert("Error", "Failed to start image generation");
-    } finally {
-      setIsGeneratingMore(false);
-    }
-  };
+    };
+    
+    const getProcessingSubtext = () => {
+      switch (scan.status) {
+        case "pending": return "Getting ready to process your menu";
+        case "uploading": return "Sending your photo to the cloud";
+        case "processing": return "AI is examining the menu layout";
+        case "extracting": return "Identifying dishes, prices, and descriptions";
+        default: return "This may take a moment";
+      }
+    };
+    
+    return (
+      <View style={styles.processingContainer}>
+        <View style={styles.processingContent}>
+          <View style={styles.processingIconContainer}>
+            <Ionicons name="restaurant" size={48} color={colors.accent.primary} />
+          </View>
+          <ActivityIndicator 
+            size="large" 
+            color={colors.accent.primary} 
+            style={styles.processingSpinner}
+          />
+          <Text style={styles.processingTitle}>{getProcessingMessage()}</Text>
+          <Text style={styles.processingSubtext}>{getProcessingSubtext()}</Text>
+          
+          {/* Progress indicator */}
+          <View style={styles.processingProgressContainer}>
+            <View style={styles.processingProgressTrack}>
+              <View 
+                style={[
+                  styles.processingProgressBar, 
+                  { width: `${scan.progress}%` }
+                ]} 
+              />
+            </View>
+            <Text style={styles.processingProgressText}>{Math.round(scan.progress)}%</Text>
+          </View>
+        </View>
+        
+        {/* Cancel button */}
+        <Pressable
+          style={({ pressed }) => [
+            styles.processingCancelButton,
+            pressed && styles.processingCancelButtonPressed,
+          ]}
+          onPress={() => {
+            Alert.alert(
+              "Cancel Scan?",
+              "This will stop processing and delete the scan.",
+              [
+                { text: "Continue", style: "cancel" },
+                {
+                  text: "Cancel Scan",
+                  style: "destructive",
+                  onPress: async () => {
+                    try {
+                      await deleteScan({ scanId: id as Id<"menuScans"> });
+                      router.back();
+                    } catch (error) {
+                      console.error("Failed to cancel:", error);
+                    }
+                  },
+                },
+              ]
+            );
+          }}
+        >
+          <Text style={styles.processingCancelText}>Cancel</Text>
+        </Pressable>
+      </View>
+    );
+  }
+  
+  // Normalize sections to array format (handles both old object and new array format)
+  const sections = Array.isArray(rawSections) 
+    ? rawSections 
+    : Object.entries(rawSections || {}).map(([name, items]) => ({ 
+        name, 
+        items: items as typeof dishes 
+      }));
 
   const handleStop = async () => {
     if (isStopping) return;
@@ -117,6 +186,31 @@ export default function ScanDetailScreen() {
             } catch (error) {
               console.error("Failed to force complete:", error);
               Alert.alert("Error", "Failed to complete scan");
+            }
+          },
+        },
+      ]
+    );
+  };
+
+  const handleDelete = () => {
+    Alert.alert(
+      "Delete Menu?",
+      "This will permanently delete this menu and all generated images. This cannot be undone.",
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Delete",
+          style: "destructive",
+          onPress: async () => {
+            setIsDeleting(true);
+            try {
+              await deleteScan({ scanId: id as Id<"menuScans"> });
+              router.back();
+            } catch (error) {
+              console.error("Failed to delete:", error);
+              Alert.alert("Error", "Failed to delete menu");
+              setIsDeleting(false);
             }
           },
         },
@@ -221,9 +315,9 @@ export default function ScanDetailScreen() {
       
       {/* Info */}
       <View style={styles.dishInfo}>
-        <Text style={styles.dishName} numberOfLines={2}>{dish.name}</Text>
+        <Text style={styles.dishName} numberOfLines={1}>{dish.name}</Text>
         {dish.description && (
-          <Text style={styles.dishDescription} numberOfLines={2}>
+          <Text style={styles.dishDescription} numberOfLines={1}>
             {dish.description}
           </Text>
         )}
@@ -245,28 +339,24 @@ export default function ScanDetailScreen() {
 
   return (
     <View style={styles.container}>
-      {/* Progress header */}
-      {scan.status !== "completed" && scan.status !== "failed" && (
+      {/* Image generation progress header */}
+      {scan.status === "generating" && (
         <View style={styles.progressHeader}>
           <View style={styles.progressRow}>
             <View style={styles.progressInfo}>
               <ActivityIndicator size="small" color={colors.accent.primary} />
-              <Text style={styles.progressText}>
-                {scan.statusMessage || `Processing: ${scan.status}`}
-              </Text>
+              <Text style={styles.progressText}>Generating images...</Text>
             </View>
-            {scan.status === "generating" && (
-              <Pressable 
-                style={styles.stopButton}
-                onPress={handleStop}
-                disabled={isStopping}
-              >
-                <Ionicons name="stop-circle" size={16} color={colors.accent.error} />
-                <Text style={styles.stopButtonText}>
-                  {isStopping ? "Stopping..." : "Stop"}
-                </Text>
-              </Pressable>
-            )}
+            <Pressable 
+              style={styles.stopButton}
+              onPress={handleStop}
+              disabled={isStopping}
+            >
+              <Ionicons name="stop-circle" size={16} color={colors.accent.error} />
+              <Text style={styles.stopButtonText}>
+                {isStopping ? "Stopping..." : "Stop"}
+              </Text>
+            </Pressable>
           </View>
           <View style={styles.progressBarContainer}>
             <View 
@@ -277,7 +367,7 @@ export default function ScanDetailScreen() {
             />
           </View>
           <Text style={styles.progressStats}>
-            {scan.imagesGenerated}/{scan.imagesRequested} images • {scan.dishesExtracted} dishes
+            {scan.imagesGenerated}/{scan.imagesRequested} images
           </Text>
         </View>
       )}
@@ -292,13 +382,29 @@ export default function ScanDetailScreen() {
         </View>
       )}
       
-      {/* Restaurant name */}
-      {scan.restaurantName && (
-        <View style={styles.restaurantHeader}>
-          <Text style={styles.restaurantName}>{scan.restaurantName}</Text>
+      {/* Restaurant header */}
+      <View style={styles.restaurantHeader}>
+        <View style={styles.restaurantInfo}>
+          <Text style={styles.restaurantName}>
+            {scan.restaurantName || "Menu Scan"}
+          </Text>
           <Text style={styles.dishCount}>{dishes.length} dishes</Text>
         </View>
-      )}
+        <Pressable
+          style={({ pressed }) => [
+            styles.deleteButton,
+            pressed && styles.deleteButtonPressed,
+          ]}
+          onPress={handleDelete}
+          disabled={isDeleting}
+        >
+          {isDeleting ? (
+            <ActivityIndicator size="small" color={colors.accent.error} />
+          ) : (
+            <Ionicons name="trash-outline" size={22} color={colors.accent.error} />
+          )}
+        </Pressable>
+      </View>
       
       {/* Dishes list */}
       <ScrollView 
@@ -307,14 +413,14 @@ export default function ScanDetailScreen() {
         showsVerticalScrollIndicator={false}
       >
         {/* Sections */}
-        {Object.entries(sections).map(([name, sectionDishes]) => 
-          renderSection(name, sectionDishes)
+        {sections.map((section) => 
+          renderSection(section.name, section.items)
         )}
         
         {/* Items without section */}
         {noSection.length > 0 && (
           <View style={styles.section}>
-            {Object.keys(sections).length > 0 && (
+            {sections.length > 0 && (
               <Text style={styles.sectionTitle}>Other Items</Text>
             )}
             <View style={styles.dishesGrid}>
@@ -339,36 +445,7 @@ export default function ScanDetailScreen() {
           )}
         </View>
         
-        {/* Spacer for button */}
-        <View style={{ height: 100 }} />
       </ScrollView>
-      
-      {/* Generate remaining button */}
-      {dishesWithoutImages > 0 && scan.status !== "generating" && (
-        <View style={styles.bottomAction}>
-          <Pressable
-            style={({ pressed }) => [
-              styles.generateButton,
-              pressed && styles.generateButtonPressed,
-              isGeneratingMore && styles.generateButtonDisabled,
-            ]}
-            onPress={handleGenerateRemaining}
-            disabled={isGeneratingMore}
-          >
-            {isGeneratingMore ? (
-              <ActivityIndicator size="small" color={colors.text.inverse} />
-            ) : (
-              <Ionicons name="sparkles" size={20} color={colors.text.inverse} />
-            )}
-            <Text style={styles.generateButtonText}>
-              {isGeneratingMore 
-                ? "Starting..." 
-                : `Generate ${dishesWithoutImages} more images`
-              }
-            </Text>
-          </Pressable>
-        </View>
-      )}
 
       {/* Full-screen dish image modal */}
       <Modal
@@ -432,6 +509,80 @@ const styles = StyleSheet.create({
     color: colors.text.secondary,
     fontSize: typography.fontSize.md,
     marginTop: spacing.md,
+  },
+  
+  // Processing screen (during extraction)
+  processingContainer: {
+    flex: 1,
+    backgroundColor: colors.bg.primary,
+    justifyContent: "center",
+    alignItems: "center",
+    padding: spacing.xl,
+  },
+  processingContent: {
+    alignItems: "center",
+    maxWidth: 300,
+  },
+  processingIconContainer: {
+    width: 100,
+    height: 100,
+    borderRadius: 50,
+    backgroundColor: colors.accent.primary + "15",
+    justifyContent: "center",
+    alignItems: "center",
+    marginBottom: spacing.lg,
+  },
+  processingSpinner: {
+    marginBottom: spacing.lg,
+  },
+  processingTitle: {
+    fontSize: typography.fontSize.xl,
+    fontWeight: "600",
+    color: colors.text.primary,
+    textAlign: "center",
+    marginBottom: spacing.sm,
+  },
+  processingSubtext: {
+    fontSize: typography.fontSize.md,
+    color: colors.text.secondary,
+    textAlign: "center",
+    lineHeight: 22,
+    marginBottom: spacing.xl,
+  },
+  processingProgressContainer: {
+    width: "100%",
+    alignItems: "center",
+  },
+  processingProgressTrack: {
+    width: "100%",
+    height: 6,
+    backgroundColor: colors.bg.tertiary,
+    borderRadius: 3,
+    overflow: "hidden",
+  },
+  processingProgressBar: {
+    height: "100%",
+    backgroundColor: colors.accent.primary,
+    borderRadius: 3,
+  },
+  processingProgressText: {
+    fontSize: typography.fontSize.sm,
+    color: colors.text.tertiary,
+    marginTop: spacing.sm,
+  },
+  processingCancelButton: {
+    position: "absolute",
+    bottom: spacing.xxl,
+    paddingVertical: spacing.sm,
+    paddingHorizontal: spacing.lg,
+  },
+  processingCancelButtonPressed: {
+    opacity: 0.7,
+  },
+  processingCancelText: {
+    fontSize: typography.fontSize.md,
+    color: colors.text.tertiary,
+    fontWeight: "500",
   },
   
   // Progress header
@@ -509,14 +660,29 @@ const styles = StyleSheet.create({
   
   // Restaurant header
   restaurantHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
     padding: spacing.md,
     borderBottomWidth: 1,
     borderBottomColor: colors.border.subtle,
+  },
+  restaurantInfo: {
+    flex: 1,
   },
   restaurantName: {
     fontSize: typography.fontSize.xxl,
     fontWeight: "700",
     color: colors.text.primary,
+  },
+  deleteButton: {
+    padding: spacing.sm,
+    borderRadius: borderRadius.md,
+    backgroundColor: colors.accent.error + "15",
+  },
+  deleteButtonPressed: {
+    opacity: 0.7,
+    backgroundColor: colors.accent.error + "25",
   },
   dishCount: {
     fontSize: typography.fontSize.md,
@@ -642,41 +808,6 @@ const styles = StyleSheet.create({
   costValue: {
     fontSize: typography.fontSize.sm,
     color: colors.text.secondary,
-    fontWeight: "600",
-  },
-  
-  // Bottom action
-  bottomAction: {
-    position: "absolute",
-    bottom: 0,
-    left: 0,
-    right: 0,
-    padding: spacing.md,
-    paddingBottom: spacing.xl,
-    backgroundColor: colors.bg.primary,
-    borderTopWidth: 1,
-    borderTopColor: colors.border.subtle,
-  },
-  generateButton: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-    gap: spacing.sm,
-    backgroundColor: colors.accent.secondary,
-    paddingVertical: spacing.md,
-    borderRadius: borderRadius.full,
-    ...shadows.md,
-  },
-  generateButtonPressed: {
-    opacity: 0.9,
-    transform: [{ scale: 0.98 }],
-  },
-  generateButtonDisabled: {
-    opacity: 0.6,
-  },
-  generateButtonText: {
-    color: colors.text.inverse,
-    fontSize: typography.fontSize.md,
     fontWeight: "600",
   },
   

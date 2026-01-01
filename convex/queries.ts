@@ -89,20 +89,25 @@ export const getScanWithDishes = query({
       .withIndex("by_scanId_order", (q) => q.eq("scanId", args.scanId))
       .collect();
     
-    // Group dishes by section
-    const sections: Record<string, typeof dishes> = {};
+    // Group dishes by section (use array to avoid non-ASCII field name issues)
+    const sectionMap = new Map<string, typeof dishes>();
     const noSection: typeof dishes = [];
     
     for (const dish of dishes) {
       if (dish.sectionName) {
-        if (!sections[dish.sectionName]) {
-          sections[dish.sectionName] = [];
-        }
-        sections[dish.sectionName].push(dish);
+        const existing = sectionMap.get(dish.sectionName) || [];
+        existing.push(dish);
+        sectionMap.set(dish.sectionName, existing);
       } else {
         noSection.push(dish);
       }
     }
+    
+    // Convert to array format (section names as values, not keys)
+    const sections = Array.from(sectionMap.entries()).map(([name, items]) => ({
+      name,
+      items,
+    }));
     
     // Calculate progress
     let progress = 0;

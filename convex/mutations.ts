@@ -394,6 +394,55 @@ export const stopImageGeneration = mutation({
 });
 
 /**
+ * Delete a scan and all associated data
+ */
+export const deleteScan = mutation({
+  args: {
+    scanId: v.id("menuScans"),
+  },
+  handler: async (ctx, args) => {
+    const scan = await ctx.db.get(args.scanId);
+    if (!scan) throw new Error("Scan not found");
+    
+    // Get all dishes for this scan
+    const dishes = await ctx.db
+      .query("dishes")
+      .withIndex("by_scanId", (q) => q.eq("scanId", args.scanId))
+      .collect();
+    
+    // Delete dish images from storage and dish records
+    for (const dish of dishes) {
+      if (dish.imageStorageId) {
+        await ctx.storage.delete(dish.imageStorageId);
+      }
+      await ctx.db.delete(dish._id);
+    }
+    
+    // Delete menu image from storage
+    if (scan.imageStorageId) {
+      await ctx.storage.delete(scan.imageStorageId);
+    }
+    
+    // Delete the scan
+    await ctx.db.delete(args.scanId);
+    
+    // Decrement user scan count
+    const user = await ctx.db
+      .query("deviceUsers")
+      .withIndex("by_deviceId", (q) => q.eq("deviceId", scan.deviceId))
+      .first();
+    
+    if (user && user.scanCount > 0) {
+      await ctx.db.patch(user._id, { 
+        scanCount: user.scanCount - 1 
+      });
+    }
+    
+    return { deleted: true, dishesDeleted: dishes.length };
+  },
+});
+
+/**
  * Queue a single dish for image generation
  * Called when user taps on a dish to generate its image
  */
