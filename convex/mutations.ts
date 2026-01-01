@@ -394,6 +394,26 @@ export const stopImageGeneration = mutation({
 });
 
 /**
+ * Update menu/restaurant name
+ */
+export const updateMenuName = mutation({
+  args: {
+    scanId: v.id("menuScans"),
+    restaurantName: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const scan = await ctx.db.get(args.scanId);
+    if (!scan) throw new Error("Scan not found");
+    
+    await ctx.db.patch(args.scanId, {
+      restaurantName: args.restaurantName.trim() || undefined,
+    });
+    
+    return { success: true };
+  },
+});
+
+/**
  * Delete a scan and all associated data
  */
 export const deleteScan = mutation({

@@ -5,7 +5,7 @@
 import { useState } from "react";
 import { 
   View, Text, StyleSheet, ScrollView, Pressable, 
-  Image, ActivityIndicator, Alert, Modal, Dimensions
+  Image, ActivityIndicator, Alert, Modal, Dimensions, TextInput
 } from "react-native";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { useQuery, useAction, useMutation } from "convex/react";
@@ -28,6 +28,8 @@ export default function ScanDetailScreen() {
   const [isStopping, setIsStopping] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
   const [selectedDish, setSelectedDish] = useState<SelectedDish>(null);
+  const [isEditingName, setIsEditingName] = useState(false);
+  const [editedName, setEditedName] = useState("");
   
   // Realtime subscription to scan + dishes
   const data = useQuery(
@@ -39,6 +41,7 @@ export default function ScanDetailScreen() {
   const stopGeneration = useMutation(api.mutations.stopImageGeneration);
   const forceComplete = useMutation(api.mutations.forceCompleteScan);
   const deleteScan = useMutation(api.mutations.deleteScan);
+  const updateMenuName = useMutation(api.mutations.updateMenuName);
 
   if (!data) {
     return (
@@ -218,6 +221,27 @@ export default function ScanDetailScreen() {
     );
   };
 
+  const handleStartEditing = () => {
+    setEditedName(scan.restaurantName || "");
+    setIsEditingName(true);
+  };
+
+  const handleFinishEditing = async () => {
+    setIsEditingName(false);
+    const trimmedName = editedName.trim();
+    // Only save if the name actually changed
+    if (trimmedName !== (scan.restaurantName || "")) {
+      try {
+        await updateMenuName({ 
+          scanId: id as Id<"menuScans">, 
+          restaurantName: trimmedName 
+        });
+      } catch (error) {
+        console.error("Failed to update name:", error);
+      }
+    }
+  };
+
   const getStatusIcon = (status: string) => {
     switch (status) {
       case "completed": return "checkmark-circle";
@@ -340,37 +364,41 @@ export default function ScanDetailScreen() {
   return (
     <View style={styles.container}>
       {/* Image generation progress header */}
-      {scan.status === "generating" && (
-        <View style={styles.progressHeader}>
-          <View style={styles.progressRow}>
-            <View style={styles.progressInfo}>
-              <ActivityIndicator size="small" color={colors.accent.primary} />
-              <Text style={styles.progressText}>Generating images...</Text>
+      {scan.status === "generating" && (() => {
+        const generating = dishes.filter(d => d.imageStatus === "generating").length;
+        const queued = dishes.filter(d => d.imageStatus === "queued").length;
+        const inProgress = generating + queued;
+        
+        if (inProgress === 0) return null;
+        
+        return (
+          <View style={styles.progressHeader}>
+            <View style={styles.progressRow}>
+              <View style={styles.progressInfo}>
+                <ActivityIndicator size="small" color={colors.accent.primary} />
+                <Text style={styles.progressText}>
+                  {generating > 0 
+                    ? `Generating ${generating} image${generating > 1 ? 's' : ''}...`
+                    : `${queued} image${queued > 1 ? 's' : ''} queued`
+                  }
+                </Text>
+              </View>
+              <Pressable 
+                style={({ pressed }) => [
+                  styles.stopButton,
+                  pressed && styles.stopButtonPressed,
+                ]}
+                onPress={handleStop}
+                disabled={isStopping}
+              >
+                <Text style={styles.stopButtonText}>
+                  {isStopping ? "Stopping..." : "Stop"}
+                </Text>
+              </Pressable>
             </View>
-            <Pressable 
-              style={styles.stopButton}
-              onPress={handleStop}
-              disabled={isStopping}
-            >
-              <Ionicons name="stop-circle" size={16} color={colors.accent.error} />
-              <Text style={styles.stopButtonText}>
-                {isStopping ? "Stopping..." : "Stop"}
-              </Text>
-            </Pressable>
           </View>
-          <View style={styles.progressBarContainer}>
-            <View 
-              style={[
-                styles.progressBar, 
-                { width: `${scan.progress}%` }
-              ]} 
-            />
-          </View>
-          <Text style={styles.progressStats}>
-            {scan.imagesGenerated}/{scan.imagesRequested} images
-          </Text>
-        </View>
-      )}
+        );
+      })()}
       
       {/* Error banner */}
       {scan.status === "failed" && (
@@ -385,9 +413,24 @@ export default function ScanDetailScreen() {
       {/* Restaurant header */}
       <View style={styles.restaurantHeader}>
         <View style={styles.restaurantInfo}>
-          <Text style={styles.restaurantName}>
-            {scan.restaurantName || "Menu Scan"}
-          </Text>
+          {isEditingName ? (
+            <TextInput
+              style={styles.restaurantNameInput}
+              value={editedName}
+              onChangeText={setEditedName}
+              onBlur={handleFinishEditing}
+              onSubmitEditing={handleFinishEditing}
+              autoFocus
+              selectTextOnFocus
+              returnKeyType="done"
+            />
+          ) : (
+            <Pressable onPress={handleStartEditing}>
+              <Text style={styles.restaurantName} numberOfLines={1}>
+                {scan.restaurantName || "Tap to name menu"}
+              </Text>
+            </Pressable>
+          )}
           <Text style={styles.dishCount}>{dishes.length} dishes</Text>
         </View>
         <Pressable
@@ -488,6 +531,7 @@ export default function ScanDetailScreen() {
           </View>
         </Pressable>
       </Modal>
+
     </View>
   );
 }
@@ -611,18 +655,20 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   stopButton: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 4,
-    paddingHorizontal: spacing.sm,
-    paddingVertical: spacing.xs,
-    backgroundColor: colors.accent.error + "20",
-    borderRadius: borderRadius.sm,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    backgroundColor: "transparent",
+    borderWidth: 1,
+    borderColor: colors.text.tertiary,
+    borderRadius: borderRadius.full,
+  },
+  stopButtonPressed: {
+    backgroundColor: colors.bg.tertiary,
   },
   stopButtonText: {
-    color: colors.accent.error,
+    color: colors.text.secondary,
     fontSize: typography.fontSize.sm,
-    fontWeight: "600",
+    fontWeight: "500",
   },
   progressBarContainer: {
     height: 4,
@@ -674,6 +720,15 @@ const styles = StyleSheet.create({
     fontSize: typography.fontSize.xxl,
     fontWeight: "700",
     color: colors.text.primary,
+  },
+  restaurantNameInput: {
+    fontSize: typography.fontSize.xxl,
+    fontWeight: "700",
+    color: colors.text.primary,
+    padding: 0,
+    margin: 0,
+    borderBottomWidth: 2,
+    borderBottomColor: colors.accent.primary,
   },
   deleteButton: {
     padding: spacing.sm,
@@ -866,5 +921,6 @@ const styles = StyleSheet.create({
     top: spacing.xxl + 20,
     right: spacing.lg,
   },
+  
 });
 
