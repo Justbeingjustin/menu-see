@@ -4,7 +4,7 @@ AI-powered menu scanner that transforms restaurant menus into beautiful digital 
 
 ## Demo
 
-<video src="demo.mp4" controls width="300"></video>
+[Watch demo video (MP4)](./demo.mp4)
 
 ## Features
 
