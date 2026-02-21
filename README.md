@@ -2,6 +2,10 @@
 
 AI-powered menu scanner that transforms restaurant menus into beautiful digital galleries with AI-generated dish images.
 
+## Demo
+
+<video src="demo.mp4" controls width="300"></video>
+
 ## Features
 
 - 📷 **Scan Menus** - Take a photo or upload from gallery
